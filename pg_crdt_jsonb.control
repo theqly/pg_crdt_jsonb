@@ -1,0 +1,5 @@
+# pg_crdt_jsonb extension
+comment = 'jsonb crdt'
+default_version = '1.0'
+module_pathname = '$libdir/pg_crdt_jsonb'
+relocatable = true

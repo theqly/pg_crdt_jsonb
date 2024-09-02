@@ -1,0 +1,4 @@
+pg_crdt_jsonb.bc
+pg_crdt_jsonb.o
+pg_crdt_jsonb.so
+.idea

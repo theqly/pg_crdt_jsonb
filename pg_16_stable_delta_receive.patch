@@ -1,0 +1,246 @@
+diff --git a/src/backend/commands/copyfromparse.c b/src/backend/commands/copyfromparse.c
+index 232768a..6a57c40 100644
+--- a/src/backend/commands/copyfromparse.c
++++ b/src/backend/commands/copyfromparse.c
+@@ -1955,7 +1955,7 @@ CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
+ 	if (fld_size == -1)
+ 	{
+ 		*isnull = true;
+-		return ReceiveFunctionCall(flinfo, NULL, typioparam, typmod);
++		return ReceiveFunctionCall(flinfo, NULL, typioparam, typmod, 0);
+ 	}
+ 	if (fld_size < 0)
+ 		ereport(ERROR,
+@@ -1977,7 +1977,7 @@ CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
+ 
+ 	/* Call the column type's binary input converter */
+ 	result = ReceiveFunctionCall(flinfo, &cstate->attribute_buf,
+-								 typioparam, typmod);
++								 typioparam, typmod, 0);
+ 
+ 	/* Trouble if it didn't eat the whole buffer */
+ 	if (cstate->attribute_buf.cursor != cstate->attribute_buf.len)
+diff --git a/src/backend/replication/logical/worker.c b/src/backend/replication/logical/worker.c
+index 832b1cf..7981cec 100644
+--- a/src/backend/replication/logical/worker.c
++++ b/src/backend/replication/logical/worker.c
+@@ -854,7 +854,7 @@ slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
+ 				getTypeBinaryInputInfo(att->atttypid, &typreceive, &typioparam);
+ 				slot->tts_values[i] =
+ 					OidReceiveFunctionCall(typreceive, colvalue,
+-										   typioparam, att->atttypmod);
++										   typioparam, att->atttypmod, 0);
+ 
+ 				/* Trouble if it didn't eat the whole buffer */
+ 				if (colvalue->cursor != colvalue->len)
+@@ -912,6 +912,7 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
+ {
+ 	int			natts = slot->tts_tupleDescriptor->natts;
+ 	int			i;
++	Datum old_value_to_crdtrecv;
+ 
+ 	/* We'll fill "slot" with a virtual tuple, so we must start with ... */
+ 	ExecClearTuple(slot);
+@@ -967,9 +968,10 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
+ 				colvalue->cursor = 0;
+ 
+ 				getTypeBinaryInputInfo(att->atttypid, &typreceive, &typioparam);
++				old_value_to_crdtrecv = slot->tts_values[i];
+ 				slot->tts_values[i] =
+ 					OidReceiveFunctionCall(typreceive, colvalue,
+-										   typioparam, att->atttypmod);
++										   typioparam, att->atttypmod, old_value_to_crdtrecv);
+ 
+ 				/* Trouble if it didn't eat the whole buffer */
+ 				if (colvalue->cursor != colvalue->len)
+diff --git a/src/backend/tcop/fastpath.c b/src/backend/tcop/fastpath.c
+index 2f70ebd..ad5db4f 100644
+--- a/src/backend/tcop/fastpath.c
++++ b/src/backend/tcop/fastpath.c
+@@ -439,7 +439,7 @@ parse_fcall_arguments(StringInfo msgBuf, struct fp_info *fip,
+ 				bufptr = &abuf;
+ 
+ 			fcinfo->args[i].value = OidReceiveFunctionCall(typreceive, bufptr,
+-														   typioparam, -1);
++														   typioparam, -1, 0);
+ 
+ 			/* Trouble if it didn't eat the whole buffer */
+ 			if (argsize != -1 && abuf.cursor != abuf.len)
+diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
+index 36cc99e..85703a0 100644
+--- a/src/backend/tcop/postgres.c
++++ b/src/backend/tcop/postgres.c
+@@ -1928,7 +1928,7 @@ exec_bind_message(StringInfo input_message)
+ 				else
+ 					bufptr = &pbuf;
+ 
+-				pval = OidReceiveFunctionCall(typreceive, bufptr, typioparam, -1);
++				pval = OidReceiveFunctionCall(typreceive, bufptr, typioparam, -1, 0);
+ 
+ 				/* Trouble if it didn't eat the whole buffer */
+ 				if (!isNull && pbuf.cursor != pbuf.len)
+diff --git a/src/backend/utils/adt/array_userfuncs.c b/src/backend/utils/adt/array_userfuncs.c
+index 5c4fdcf..4765522 100644
+--- a/src/backend/utils/adt/array_userfuncs.c
++++ b/src/backend/utils/adt/array_userfuncs.c
+@@ -818,7 +818,8 @@ array_agg_deserialize(PG_FUNCTION_ARGS)
+ 			result->dvalues[i] = ReceiveFunctionCall(&iodata->typreceive,
+ 													 &elem_buf,
+ 													 iodata->typioparam,
+-													 -1);
++													 -1,
++													 0);
+ 
+ 			buf.data[buf.cursor] = csave;
+ 		}
+diff --git a/src/backend/utils/adt/arrayfuncs.c b/src/backend/utils/adt/arrayfuncs.c
+index 57c12df..c34c0b9 100644
+--- a/src/backend/utils/adt/arrayfuncs.c
++++ b/src/backend/utils/adt/arrayfuncs.c
+@@ -1510,7 +1510,7 @@ ReadArrayBinary(StringInfo buf,
+ 		{
+ 			/* -1 length means NULL */
+ 			values[i] = ReceiveFunctionCall(receiveproc, NULL,
+-											typioparam, typmod);
++											typioparam, typmod, 0);
+ 			nulls[i] = true;
+ 			continue;
+ 		}
+@@ -1533,7 +1533,7 @@ ReadArrayBinary(StringInfo buf,
+ 
+ 		/* Now call the element's receiveproc */
+ 		values[i] = ReceiveFunctionCall(receiveproc, &elem_buf,
+-										typioparam, typmod);
++										typioparam, typmod, 0);
+ 		nulls[i] = false;
+ 
+ 		/* Trouble if it didn't eat the whole buffer */
+diff --git a/src/backend/utils/adt/domains.c b/src/backend/utils/adt/domains.c
+index 8d766f6..eeffcef 100644
+--- a/src/backend/utils/adt/domains.c
++++ b/src/backend/utils/adt/domains.c
+@@ -320,7 +320,8 @@ domain_recv(PG_FUNCTION_ARGS)
+ 	value = ReceiveFunctionCall(&my_extra->proc,
+ 								buf,
+ 								my_extra->typioparam,
+-								my_extra->typtypmod);
++								my_extra->typtypmod,
++								0);
+ 
+ 	/*
+ 	 * Do the necessary checks to ensure it's a valid domain value.
+diff --git a/src/backend/utils/adt/multirangetypes.c b/src/backend/utils/adt/multirangetypes.c
+index 9443c2b..93fa556 100644
+--- a/src/backend/utils/adt/multirangetypes.c
++++ b/src/backend/utils/adt/multirangetypes.c
+@@ -363,7 +363,8 @@ multirange_recv(PG_FUNCTION_ARGS)
+ 		ranges[i] = DatumGetRangeTypeP(ReceiveFunctionCall(&cache->typioproc,
+ 														   &tmpbuf,
+ 														   cache->typioparam,
+-														   typmod));
++														   typmod,
++														   0));
+ 	}
+ 	pfree(tmpbuf.data);
+ 
+diff --git a/src/backend/utils/adt/rangetypes.c b/src/backend/utils/adt/rangetypes.c
+index 24bad52..52a807f 100644
+--- a/src/backend/utils/adt/rangetypes.c
++++ b/src/backend/utils/adt/rangetypes.c
+@@ -209,7 +209,8 @@ range_recv(PG_FUNCTION_ARGS)
+ 		lower.val = ReceiveFunctionCall(&cache->typioproc,
+ 										&bound_buf,
+ 										cache->typioparam,
+-										typmod);
++										typmod,
++										0);
+ 		pfree(bound_buf.data);
+ 	}
+ 	else
+@@ -227,7 +228,8 @@ range_recv(PG_FUNCTION_ARGS)
+ 		upper.val = ReceiveFunctionCall(&cache->typioproc,
+ 										&bound_buf,
+ 										cache->typioparam,
+-										typmod);
++										typmod,
++										0);
+ 		pfree(bound_buf.data);
+ 	}
+ 	else
+diff --git a/src/backend/utils/adt/rowtypes.c b/src/backend/utils/adt/rowtypes.c
+index ad17665..ff3f399 100644
+--- a/src/backend/utils/adt/rowtypes.c
++++ b/src/backend/utils/adt/rowtypes.c
+@@ -657,7 +657,8 @@ record_recv(PG_FUNCTION_ARGS)
+ 		values[i] = ReceiveFunctionCall(&column_info->proc,
+ 										bufptr,
+ 										column_info->typioparam,
+-										att->atttypmod);
++										att->atttypmod,
++										0);
+ 
+ 		if (bufptr)
+ 		{
+diff --git a/src/backend/utils/fmgr/fmgr.c b/src/backend/utils/fmgr/fmgr.c
+index 9208c31..63041a1 100644
+--- a/src/backend/utils/fmgr/fmgr.c
++++ b/src/backend/utils/fmgr/fmgr.c
+@@ -1666,15 +1666,15 @@ OutputFunctionCall(FmgrInfo *flinfo, Datum val)
+  */
+ Datum
+ ReceiveFunctionCall(FmgrInfo *flinfo, StringInfo buf,
+-					Oid typioparam, int32 typmod)
++					Oid typioparam, int32 typmod, Datum oldvalue)
+ {
+-	LOCAL_FCINFO(fcinfo, 3);
++	LOCAL_FCINFO(fcinfo, 4);
+ 	Datum		result;
+ 
+ 	if (buf == NULL && flinfo->fn_strict)
+ 		return (Datum) 0;		/* just return null result */
+ 
+-	InitFunctionCallInfoData(*fcinfo, flinfo, 3, InvalidOid, NULL, NULL);
++	InitFunctionCallInfoData(*fcinfo, flinfo, 4, InvalidOid, NULL, NULL);
+ 
+ 	fcinfo->args[0].value = PointerGetDatum(buf);
+ 	fcinfo->args[0].isnull = false;
+@@ -1682,6 +1682,8 @@ ReceiveFunctionCall(FmgrInfo *flinfo, StringInfo buf,
+ 	fcinfo->args[1].isnull = false;
+ 	fcinfo->args[2].value = Int32GetDatum(typmod);
+ 	fcinfo->args[2].isnull = false;
++	fcinfo->args[3].isnull = (oldvalue == 0) ? true : false;
++	fcinfo->args[3].value = oldvalue;
+ 
+ 	result = FunctionCallInvoke(fcinfo);
+ 
+@@ -1741,12 +1743,12 @@ OidOutputFunctionCall(Oid functionId, Datum val)
+ 
+ Datum
+ OidReceiveFunctionCall(Oid functionId, StringInfo buf,
+-					   Oid typioparam, int32 typmod)
++					   Oid typioparam, int32 typmod, Datum oldvalue)
+ {
+ 	FmgrInfo	flinfo;
+ 
+ 	fmgr_info(functionId, &flinfo);
+-	return ReceiveFunctionCall(&flinfo, buf, typioparam, typmod);
++	return ReceiveFunctionCall(&flinfo, buf, typioparam, typmod, oldvalue);
+ }
+ 
+ bytea *
+diff --git a/src/include/fmgr.h b/src/include/fmgr.h
+index b120f5e..1b47c7e 100644
+--- a/src/include/fmgr.h
++++ b/src/include/fmgr.h
+@@ -713,9 +713,9 @@ extern Datum OidInputFunctionCall(Oid functionId, char *str,
+ extern char *OutputFunctionCall(FmgrInfo *flinfo, Datum val);
+ extern char *OidOutputFunctionCall(Oid functionId, Datum val);
+ extern Datum ReceiveFunctionCall(FmgrInfo *flinfo, fmStringInfo buf,
+-								 Oid typioparam, int32 typmod);
++								 Oid typioparam, int32 typmod, Datum oldvalue);
+ extern Datum OidReceiveFunctionCall(Oid functionId, fmStringInfo buf,
+-									Oid typioparam, int32 typmod);
++									Oid typioparam, int32 typmod, Datum oldvalue);
+ extern bytea *SendFunctionCall(FmgrInfo *flinfo, Datum val);
+ extern bytea *OidSendFunctionCall(Oid functionId, Datum val);
+ 
